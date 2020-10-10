@@ -1,0 +1,242 @@
+package com.ebupt.iot.iiot.ldap.util;
+
+import com.ebupt.iot.iiot.ldap.entity.vo.PageParam;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.naming.Context;
+import javax.naming.NamingEnumeration;
+import javax.naming.NamingException;
+import javax.naming.directory.*;
+import javax.naming.ldap.InitialLdapContext;
+import javax.naming.ldap.LdapContext;
+import java.util.*;
+
+/**
+ * LDAP分页查询,使用时需要异步统计返回结果集的总行数
+ * @author sxl
+ *
+ */
+public class LdapSearch {
+    private final static Logger LOG = LoggerFactory.getLogger(LdapSearch.class);
+    /**
+     * 根据条件查找指定DN的条目下的一层所有属性
+     *
+     * @param start
+     *            开始行
+     * @param limit
+     *            分页大小,如果为-1,则返回结果集的总行数
+     * @return 符合查询结果的List
+     */
+    public static List searchContextOneByPage(int start, int limit){
+        String dn="cn=person,dc=huangyi,dc=com";
+        String filter="objectClass=*";
+        String[] returnedAtts = { "id", "uid","cn","userPassword", "mail","description"};
+
+        DirContext context = getDirContext("ldap://192.144.254.11:389","cn=Manager,dc=huangyi,dc=com","123456");
+        if(context == null) return null;
+        // 实例化一个搜索器
+        SearchControls constraints = new SearchControls();
+        // 设置搜索器的搜索范围为ONELEVEL
+        constraints.setSearchScope( SearchControls.ONELEVEL_SCOPE);
+        // 设置返回的属性
+        if (returnedAtts != null) {
+            constraints.setReturningAttributes(returnedAtts);
+        }
+        try {
+            if (filter == null || filter.trim().equals("")) {
+                filter = "objectclass=*";
+            }
+            NamingEnumeration<SearchResult> results = context.search(dn, filter, constraints);
+            context.close();
+            return searchPage(results,start,limit);
+        } catch (NamingException ex) {
+            ex.printStackTrace();
+            return null;
+        }
+    }
+
+    /**
+     * 分页查询
+     * @param results
+     * @param results
+     * @throws NamingException
+     */
+    private static List searchPage(NamingEnumeration<SearchResult> results,int start,int limit) {
+        List resultList = new ArrayList();
+        List<SearchResult> newResults = new ArrayList<>();
+        while (true) {
+            try {
+                if (!(results != null && results.hasMore())) break;
+            } catch (NamingException e) {
+                e.printStackTrace();
+            }
+            SearchResult si = null;// 取一个条目
+            try {
+                si = results.next();
+            } catch (NamingException e) {
+                e.printStackTrace();
+            }
+            newResults.add(si);
+        }
+        // 倒置结果集按照时间戳降序排列
+        Collections.reverse(newResults);
+        int row = 0;
+        boolean flag = false;
+
+        for(SearchResult item: newResults){
+            if(limit == -1)
+                row++;
+            else{
+                if(row++ == start)
+                    flag = true;
+                Attributes attrs = item.getAttributes();
+                if (attrs != null && flag) {
+                    Map resultRowMap = new HashMap();// 一行数据
+                    for (NamingEnumeration ae = attrs.getAll(); ae.hasMoreElements();) {
+                        Attribute attr = null;// 获取一个属性
+                        try {
+                            attr = (Attribute) ae.next();
+                        } catch (NamingException e) {
+                            e.printStackTrace();
+                        }
+                        String attrId = attr.getID();
+                        if(Objects.equals(attrId,"cn")){
+                            attrId = "personName";
+                        }
+                        Enumeration vals = null;
+                        try {
+                            vals = attr.getAll();
+                        } catch (NamingException e) {
+                            e.printStackTrace();
+                        }
+                        if (vals != null) {
+                            ArrayList valList = new ArrayList();
+                            while (vals.hasMoreElements()) {
+                                Object obj = vals.nextElement();
+                                if (obj instanceof String) {
+                                    String _value = (String) obj;
+                                    resultRowMap.put(attrId, _value);
+                                    valList.add(_value);
+                                } else {
+                                    valList.add(obj);
+                                    resultRowMap.put(attrId, obj);
+                                }
+                            }
+//                            resultRowMap.put(attrId, valList);
+                        }
+                    }
+                    resultList.add(resultRowMap);
+                    if(resultList.size() == limit){
+                        break;
+                    }
+
+                }
+            }
+
+        }
+        try {
+            results.close();
+        } catch (NamingException e) {
+            e.printStackTrace();
+        }
+        if(limit == -1)//如果limit为-1,则只返回总行数
+            resultList.add(row);
+        return resultList;
+    }
+
+    /**
+     * 从LDAP中取得一个连接
+     * @return DirContext
+     */
+    private static LdapContext getDirContext(String url,String userdn,String password){
+        Properties mEnv = new Properties();
+        mEnv.put(Context.AUTHORITATIVE, "true");
+        mEnv.put("com.sun.jndi.ldap.connect.pool", "false");
+        mEnv.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.ldap.LdapCtxFactory");
+        mEnv.put(Context.PROVIDER_URL, url);
+        mEnv.put("com.sun.jndi.ldap.connect.timeout","3000");
+        mEnv.put(Context.SECURITY_AUTHENTICATION, "simple");
+        mEnv.put(Context.SECURITY_PRINCIPAL, userdn);
+        mEnv.put(Context.SECURITY_CREDENTIALS, password);
+//        DirContext ctx = null;
+        LdapContext ctx = null;
+        try {
+            ctx = new InitialLdapContext(mEnv, null);
+//            String sortKey = "cn";
+//            ctx.setRequestControls(new Control[]{new SortControl(sortKey,Control.CRITICAL)});
+        } catch (NamingException ex) {
+            ex.printStackTrace();
+            if(ctx != null)
+                try {
+                    ctx.close();
+                } catch (NamingException e) {
+                    e.printStackTrace();
+                }
+        }
+        return ctx;
+
+    }
+
+    public static List searchContextOneByPage(PageParam param){
+        String dn="cn=person,dc=huangyi,dc=com";
+        String filter="(&(cn=" + (param.getPersonName()== null? "*": "*" + param.getPersonName() + "*") + ")" + "(uid=" + (param.getUid() == null? "*":"*" +param.getUid()+ "*") + "))";
+
+        String[] returnedAtts = { "id", "uid","cn","userPassword", "mail","description"};
+
+        LdapContext context = getDirContext("ldap://192.144.254.11:389","cn=Manager,dc=huangyi,dc=com","123456");
+        if(context == null) return null;
+
+        // 实例化一个搜索器
+        SearchControls constraints = new SearchControls();
+        // 设置搜索器的搜索范围为ONELEVEL
+        constraints.setSearchScope( SearchControls.ONELEVEL_SCOPE);
+        // 设置返回的属性
+        if (returnedAtts != null) {
+            constraints.setReturningAttributes(returnedAtts);
+        }
+        try {
+            if (filter == null || filter.trim().equals("")) {
+                filter = "(&(cn=" + (param.getPersonName() == null? "*": "*" + param.getPersonName() + "*") + ")" + "(uid=" + (param.getUid() == null? "*":"*" +param.getUid()+ "*") + "))";
+            }
+            LOG.info("过滤条件filter: [{}]" + filter);
+            NamingEnumeration<SearchResult> results = context.search(dn, filter, constraints);
+            context.close();
+            return searchPage(results,(param.getPageNumber()-1) * param.getPageSize(),param.getPageSize());
+        } catch (NamingException ex) {
+            ex.printStackTrace();
+            return null;
+        }
+    }
+
+    public static List searchContextOneByPage4Count(PageParam param){
+        String dn="cn=person,dc=huangyi,dc=com";
+        String filter="(&(cn=" + (param.getPersonName()== null? "*": "*" + param.getPersonName() + "*") + ")" + "(uid=" + (param.getUid() == null? "*":"*" +param.getUid()+ "*") + "))";
+
+        String[] returnedAtts = { "id", "uid","cn","userPassword", "mail","description"};
+        LdapContext context = getDirContext("ldap://192.144.254.11:389","cn=Manager,dc=huangyi,dc=com","123456");
+        if(context == null) return null;
+        // 实例化一个搜索器
+        SearchControls constraints = new SearchControls();
+        // 设置搜索器的搜索范围为ONELEVEL
+        constraints.setSearchScope( SearchControls.ONELEVEL_SCOPE);
+        // 设置返回的属性
+        if (returnedAtts != null) {
+            constraints.setReturningAttributes(returnedAtts);
+        }
+        try {
+            if (filter == null || filter.trim().equals("")) {
+                filter = "(&(cn=" + (param.getPersonName()== null? "*": "*" + param.getPersonName() + "*") + ")" + "(uid=" + (param.getUid() == null? "*":"*" +param.getUid()+ "*") + "))";
+            }
+            LOG.info("过滤条件filter: [{}]" + filter);
+            NamingEnumeration<SearchResult> results = context.search(dn, filter, constraints);
+            context.close();
+            return searchPage(results,param.getPageNumber()-1,-1);
+        } catch (NamingException ex) {
+            ex.printStackTrace();
+            return null;
+        }
+    }
+
+}
+
