@@ -1,0 +1,149 @@
+package com.ebupt.iot.iiot.vgw.util;
+
+import com.alibaba.fastjson.JSONObject;
+import org.apache.commons.codec.binary.Base64;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.util.EntityUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * 签名工具类
+ */
+public class SignUtils {
+    private static final String[] USER_AGENT = {"User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36"};
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(SignUtils.class);
+
+    /**
+     * @param requestType POST/GET
+     * @param appId       对应数据库中的appId
+     * @param path        请求url
+     * @param appKey      对应数据库中的appKey
+     * @return sign 返回一个生成的签名
+     */
+    public static String computeSign(String requestType, String appId, String appKey,
+                                     String path, long currentTime) {
+        String sign;
+        JSONObject obj = new JSONObject(new LinkedHashMap<>());
+        obj.put("httpmethod", requestType);
+        obj.put("x-ca-appid", appId);
+        obj.put("x-ca-timestamp", String.valueOf(currentTime));
+        obj.put("x-ca-version", "1.0");
+        obj.put("path", path);
+
+        Mac hmacSha256 = null;
+        try {
+            hmacSha256 = Mac.getInstance("HmacSHA256");
+        } catch (NoSuchAlgorithmException e) {
+        }
+        byte[] keyBytes = new byte[0];
+        try {
+            keyBytes = appKey.getBytes("UTF-8");
+        } catch (UnsupportedEncodingException e) {
+        }
+        try {
+            hmacSha256.init(new SecretKeySpec(keyBytes, 0, keyBytes.length, "HmacSHA256"));
+        } catch (InvalidKeyException e) {
+
+        }
+        try {
+            sign = Base64.encodeBase64String(hmacSha256.doFinal(obj.toString().getBytes("UTF-8")));
+            return sign;
+        } catch (UnsupportedEncodingException e) {
+
+        }
+        return null;
+    }
+
+    public static String sendGetRequest(String httpUrl, Map<String, Object> param, String appId, String sign, long currentTime) {
+        CloseableHttpClient httpClient = HttpClients.custom().build();
+
+        StringBuilder builder = new StringBuilder(httpUrl);
+        String urlString = httpUrl;
+
+        if (!param.isEmpty()) {
+            builder.append("?");
+            param.forEach((key, value) -> {
+                if (value instanceof ArrayList) {
+                    ArrayList v = (ArrayList) value;
+                    for (Object o : v) {
+                        builder.append(key).append("=").append(o).append("&");
+                    }
+                } else {
+                    builder.append(key).append("=").append(value).append("&");
+                }
+            });
+            urlString = builder.toString();
+            urlString = urlString.substring(0, urlString.length() - 1);
+        }
+
+        HttpGet httpGet = new HttpGet(urlString);
+        httpGet.setHeader(USER_AGENT[0], USER_AGENT[1]);
+        httpGet.setHeader("x-ca-appid", appId);
+        httpGet.setHeader("x-ca-signature", sign);
+        httpGet.setHeader("x-ca-timestamp", String.valueOf(currentTime));
+        httpGet.setHeader("x-ca-version", "1.0");
+
+        httpGet.setConfig(requestConfig());
+        String result = null;
+        CloseableHttpResponse response = null;
+        try {
+            response = httpClient.execute(httpGet);
+            if (response.getStatusLine().getStatusCode() == 200) {
+                result = EntityUtils.toString(response.getEntity());
+            }
+        } catch (Exception e) {
+            LOGGER.error("处理请求时发生错误！", e);
+        } finally {
+            try {
+                if (null != response) {
+                    response.close();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        return result;
+    }
+
+    private static RequestConfig requestConfig() {
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setSocketTimeout(30000)
+                .setConnectTimeout(10000)
+                .setConnectionRequestTimeout(10000)
+                .build();
+
+        return requestConfig;
+    }
+
+    public static void main(String[] args) {
+        final long currentTime = System.currentTimeMillis();
+        final String sign = computeSign("GET",
+                "FxX6yLm9yg1DVHKzeRwqXU",
+                "JEBBiJYu5nTjtDny",
+                "/iiot-dmp/device/mgmt/findDeviceByProductIdAndDeviceSN", currentTime);
+        Map<String, Object> param = new HashMap<>();
+        param.put("productId", "U35z9PtEZZ3PkHniVG1BMs");
+        param.put("deviceSn", "jisdusudus");
+        String result = sendGetRequest("http://10.1.60.103:5555/iiot-dmp/device/mgmt/findDeviceByProductIdAndDeviceSN",
+                param, "FxX6yLm9yg1DVHKzeRwqXU", sign, currentTime);
+
+        System.out.println(result);
+    }
+}
